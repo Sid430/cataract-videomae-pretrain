@@ -1,0 +1,29 @@
+# VideoMAE v2 pretraining config — cataract surgery (Cataract-1K + Cataract-LMM)
+# Mirrors the standard VideoMAE v2 ViT-B/16 recipe, adapted for a single-lab run.
+
+data:
+  data_root: /path/to/cataract_lmm_resized   # set to the resized clips moha delivers
+  data_mode: video            # "video" (.mp4 via decord) or "frames"
+  num_frames: 16
+  img_size: 224
+  sampling_stride: 4          # ~2s of context at 30fps
+
+model:
+  name: base                  # ViT-B/16
+  enc_mask_ratio: 0.9         # tube masking ratio (VideoMAE standard)
+  dec_mask_ratio: 0.5         # dual masking (the v2 efficiency trick)
+
+optim:
+  batch_size: 16              # per-GPU; scale up if resources allow
+  epochs: 800
+  lr: 1.5e-4                  # base LR; scale linearly with effective batch size
+  min_lr: 1.0e-6
+  warmup_epochs: 40
+  weight_decay: 0.05
+  clip_grad: 1.0
+  amp: true
+
+io:
+  out_dir: ./checkpoints
+  save_every: 50
+  log_every: 10
