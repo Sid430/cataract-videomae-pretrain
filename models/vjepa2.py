@@ -1,31 +1,3 @@
-"""
-V-JEPA 2 — Video Joint-Embedding Predictive Architecture (self-supervised).
-
-Faithful re-implementation of the core V-JEPA 2 design (Assran et al., 2025,
-arXiv:2506.09985), including the feature that distinguishes V-JEPA 2 from
-V-JEPA 1: 3D Rotary Position Embeddings (3D-RoPE) applied inside attention,
-instead of absolute sin-cos position embeddings.
-
-Components:
-  - Tubelet patch embedding (2 x 16 x 16).
-  - 3D-RoPE: head_dim is split into 3 segments (temporal / height / width);
-    a 1D rotary embedding is applied to each using that token's grid coordinate.
-    Applied to q and k inside every attention block (encoder + predictor).
-  - CONTEXT ENCODER E_theta : ViT that processes only the *visible* tokens.
-  - TARGET ENCODER  E_bar   : EMA (momentum) copy of the encoder; processes the
-                              *full* video (no grad) to produce targets.
-  - PREDICTOR       P_phi   : narrow ViT taking context + learnable mask tokens
-                              (positions supplied via RoPE) -> predicts targets.
-  - Multi-block spatiotemporal masking (~90%).
-  - Loss = L1 between predictor outputs and LayerNorm'd target embeddings at the
-    masked positions. Latent space only: no pixel decoder, no negatives.
-
-This is a faithful research implementation, not a bit-exact clone of Meta's
-code (which adds a multi-mask collator, progressive resolution, ViT-g scale,
-etc.). For publication-grade results, initialize from the official
-facebookresearch/vjepa2 weights.
-"""
-
 import copy
 import math
 import torch
