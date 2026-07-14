@@ -1,16 +1,3 @@
-"""
-Plotting utilities for VideoMAE v2 pretraining.
-
-Reads the metadata written during training and renders a learning-curve PDF.
-Used both by pretrain.py (auto-generate at checkpoints/end) and by the
-standalone plot_curves.py (regenerate any time, no GPU needed).
-
-Metadata files (in the run's out-dir):
-  metrics.jsonl   - one JSON record per step: {gstep, epoch, step, loss, lr}
-  epoch_log.csv   - per-epoch summary: epoch, avg_loss, time_sec
-  run_meta.json   - the run's config (argparse namespace)
-"""
-
 import os
 import csv
 import json
