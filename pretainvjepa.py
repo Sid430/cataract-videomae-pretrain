@@ -1,22 +1,3 @@
-"""
-V-JEPA 2 self-supervised pretraining entrypoint.
-
-Mirrors pretrain.py (same dataset, metadata logging, learning-curve PDF, early
-stopping, AMP) but trains the V-JEPA 2 architecture: a context encoder + narrow
-predictor optimized to predict the embeddings of an EMA target encoder in latent
-space (L1 loss), with no pixel reconstruction. The target encoder is updated by
-an EMA momentum schedule each step.
-
-Quick dummy run:
-    python pretrain_vjepa.py --dummy --model tiny --epochs 1 --steps-per-epoch 4 --batch-size 2
-
-Real run on the A100:
-    python pretrain_vjepa.py --data-root "$DATA_ROOT" --data-mode video \
-        --model base --batch-size 64 --epochs 300 --amp --early-stop-patience 15
-
-The saved checkpoint's `encoder` is the reusable backbone for downstream tasks.
-"""
-
 import os
 import sys
 import math
@@ -55,6 +36,11 @@ def build_args():
     p.add_argument("--clip-grad", type=float, default=1.0)
     p.add_argument("--num-workers", type=int, default=8)
     p.add_argument("--amp", action="store_true")
+    p.add_argument("--accum-steps", type=int, default=1,
+                   help="gradient accumulation steps (effective batch = batch * accum)")
+    p.add_argument("--grad-checkpoint", action="store_true",
+                   help="use activation checkpointing on encoder+predictor blocks "
+                        "(cuts memory ~2x at ~30%% extra compute)")
     # EMA schedule for the target encoder
     p.add_argument("--ema-start", type=float, default=0.996)
     p.add_argument("--ema-end", type=float, default=1.0)
@@ -133,6 +119,21 @@ def main():
     print(f"[model] V-JEPA2-{args.model} | {n_tr:.1f}M trainable | "
           f"{model.num_patches} tokens | device={device}")
 
+    if args.grad_checkpoint:
+        # wrap RoPEBlock.forward to use checkpoint(). Trades ~30% compute for
+        # ~half the activation memory. Applied to online encoder + predictor;
+        # target encoder is under no_grad so checkpointing wouldn't help there.
+        from torch.utils.checkpoint import checkpoint
+        def wrap(block):
+            orig = block.forward
+            block.forward = lambda x, cos, sin: checkpoint(
+                orig, x, cos, sin, use_reentrant=False)
+        for b in model.encoder.blocks:
+            wrap(b)
+        for b in model.predictor_blocks:
+            wrap(b)
+        print("[mem] gradient checkpointing enabled on encoder + predictor")
+
     # only the online encoder + predictor are optimized (target is EMA)
     params = [p for p in model.parameters() if p.requires_grad]
     opt = torch.optim.AdamW(params, lr=args.lr, betas=(0.9, 0.95),
@@ -142,6 +143,8 @@ def main():
     steps_per_epoch = args.steps_per_epoch or len(loader)
     total_steps = steps_per_epoch * args.epochs
     warmup_steps = steps_per_epoch * args.warmup_epochs
+    print(f"[optim] batch={args.batch_size} accum={args.accum_steps} "
+          f"effective_batch={args.batch_size * args.accum_steps}")
 
     def maybe_plot():
         if not args.no_plot:
@@ -166,26 +169,33 @@ def main():
                 for g in opt.param_groups:
                     g["lr"] = lr
 
-                opt.zero_grad()
+                accum = max(1, args.accum_steps)
+                is_accum_step = ((i + 1) % accum == 0) or (i + 1 == steps_per_epoch)
+
                 with torch.autocast(device_type=device.type,
                                     enabled=args.amp and device.type == "cuda"):
                     loss, _ = model(clip)
-                scaler.scale(loss).backward()
-                if args.clip_grad:
-                    scaler.unscale_(opt)
-                    torch.nn.utils.clip_grad_norm_(params, args.clip_grad)
-                scaler.step(opt)
-                scaler.update()
+                # scale so summed grads == mean grads of an effective batch
+                scaler.scale(loss / accum).backward()
 
-                # EMA update of the target encoder AFTER the online step
-                m = ema_momentum(gstep, total_steps, args.ema_start, args.ema_end)
-                model.update_target(m)
+                if is_accum_step:
+                    if args.clip_grad:
+                        scaler.unscale_(opt)
+                        torch.nn.utils.clip_grad_norm_(params, args.clip_grad)
+                    scaler.step(opt)
+                    scaler.update()
+                    opt.zero_grad(set_to_none=True)
+                    # EMA update on optimizer steps only (once per effective batch)
+                    m = ema_momentum(gstep, total_steps, args.ema_start, args.ema_end)
+                    model.update_target(m)
+                    gstep += 1
+                else:
+                    m = ema_momentum(gstep, total_steps, args.ema_start, args.ema_end)
 
                 loss_val = loss.item()
                 running += loss_val
                 logger.log_step(gstep, epoch, i + 1, loss_val, lr)
-                gstep += 1
-                if gstep % args.log_every == 0:
+                if is_accum_step and gstep % args.log_every == 0:
                     print(f"  epoch {epoch} step {i+1}/{steps_per_epoch} "
                           f"loss {loss_val:.4f} lr {lr:.2e} ema {m:.4f}")
 
