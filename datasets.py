@@ -1,15 +1,3 @@
-"""
-Datasets for VideoMAE v2 pretraining.
-
-Two classes:
-  DummyVideoDataset    - random synthetic clips, for verifying the training loop
-                         runs today before real data arrives.
-  CataractVideoDataset - reads real clips for Cataract-1K / Cataract-LMM. Supports
-                         either .mp4 files (via decord) or pre-extracted frame
-                         folders (no extra deps). Swap this in tomorrow.
-
-Clip tensor convention: (C, T, H, W), float, normalized by ImageNet stats.
-"""
 
 import os
 import glob
